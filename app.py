@@ -1,6 +1,5 @@
 import io
 import math
-import random
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
@@ -31,17 +30,14 @@ def mix_rgb(c1: Tuple[float, float, float], c2: Tuple[float, float, float], t: f
 
 
 def darken(rgb: Tuple[float, float, float], amount: float) -> Tuple[float, float, float]:
-    # amount: 0~1, bigger => darker
     return (rgb[0] * (1 - amount), rgb[1] * (1 - amount), rgb[2] * (1 - amount))
 
 
 def lighten(rgb: Tuple[float, float, float], amount: float) -> Tuple[float, float, float]:
-    # amount: 0~1, bigger => lighter
     return (rgb[0] + (1 - rgb[0]) * amount, rgb[1] + (1 - rgb[1]) * amount, rgb[2] + (1 - rgb[2]) * amount)
 
 
 def get_builtin_palettes() -> dict:
-    # 0~1 floats
     return {
         "dreamy": [
             (0.86, 0.73, 0.95),
@@ -95,6 +91,21 @@ def get_builtin_palettes() -> dict:
     }
 
 
+def get_background_presets():
+    # RGB 0~255
+    return {
+        "Dark": (16, 16, 18),
+        "Light": (248, 248, 250),
+        "Paper": (245, 241, 232),
+        "Cream": (252, 246, 232),
+        "Mint": (232, 248, 244),
+        "Lavender": (241, 236, 252),
+        "Sky": (235, 244, 255),
+        "Peach": (255, 238, 232),
+        "Slate": (34, 38, 45),
+    }
+
+
 def parse_palette_csv(file_bytes: bytes) -> List[Tuple[float, float, float]]:
     df = pd.read_csv(io.BytesIO(file_bytes))
     required = {"r", "g", "b"}
@@ -109,14 +120,13 @@ def parse_palette_csv(file_bytes: bytes) -> List[Tuple[float, float, float]]:
 
 
 def polygon_points(cx: float, cy: float, radius: float, sides: int, wobble: float, rng: np.random.Generator):
-    # wobble: 0~1, controls angle/radius jitter
     pts = []
     base_angle = rng.uniform(0, 2 * math.pi)
     for i in range(sides):
         t = i / sides
         ang = base_angle + t * 2 * math.pi
-        ang += rng.normal(0, wobble * 0.25)  # angle jitter
-        r = radius * (1 + rng.normal(0, wobble * 0.35))  # radius jitter
+        ang += rng.normal(0, wobble * 0.25)
+        r = radius * (1 + rng.normal(0, wobble * 0.35))
         x = cx + math.cos(ang) * r
         y = cy + math.sin(ang) * r
         pts.append((x, y))
@@ -144,9 +154,6 @@ def draw_soft_shape(
     gradient_steps: int,
     rng: np.random.Generator,
 ):
-    """
-    用“多层缩放叠画”模拟渐变与软边：从外到内画多次，颜色/透明度逐步变化。
-    """
     draw = ImageDraw.Draw(img_rgba, "RGBA")
 
     def draw_one(pass_radius: float, color_rgb: Tuple[float, float, float], a: float, offset=(0, 0), is_stroke=False):
@@ -161,7 +168,6 @@ def draw_soft_shape(
             pts = polygon_points(cx + ox, cy + oy, pass_radius, sides, wobble, rng)
             if is_stroke:
                 draw.polygon(pts, outline=rgb01_to_rgba255(color_rgb, a))
-                # Pillow 的 polygon outline 不支持 width；用多次略缩/略扩描边模拟
                 for k in range(1, max(1, stroke_width)):
                     pts2 = polygon_points(cx + ox, cy + oy, pass_radius + k * 0.35, sides, wobble * 0.2, rng)
                     draw.polygon(pts2, outline=rgb01_to_rgba255(color_rgb, a))
@@ -177,11 +183,10 @@ def draw_soft_shape(
             aa = shadow_alpha * (1 - 0.7 * t)
             draw_one(rr, shadow_rgb, aa, offset=shadow_offset)
 
-    # Fill gradient-like passes
+    # Fill (soft gradient-ish)
     for s in range(gradient_steps):
         t = s / (gradient_steps - 1) if gradient_steps > 1 else 1.0
         rr = radius * (1 - 0.18 * t)
-        # 外层更浅更透明，内层更饱和更实
         c = mix_rgb(lighten(fill_rgb, 0.35), fill_rgb, t)
         aa = alpha * (0.55 + 0.45 * t)
         draw_one(rr, c, aa)
@@ -196,7 +201,6 @@ def draw_text_block(img_rgba: Image.Image, title: str, subtitle: str, dark_bg: b
     draw = ImageDraw.Draw(img_rgba, "RGBA")
     W, H = img_rgba.size
 
-    # Try load a default font; if not present, fallback
     try:
         title_font = ImageFont.truetype("DejaVuSans.ttf", size=max(18, W // 26))
         sub_font = ImageFont.truetype("DejaVuSans.ttf", size=max(12, W // 42))
@@ -206,10 +210,6 @@ def draw_text_block(img_rgba: Image.Image, title: str, subtitle: str, dark_bg: b
 
     pad = int(W * 0.06)
     color = (0, 0, 0, 220) if not dark_bg else (245, 245, 245, 220)
-
-    # Subtle label background (optional)
-    # draw.rounded_rectangle([pad-8, pad-6, pad+W*0.55, pad+W*0.13], radius=16,
-    #                        fill=(255,255,255,40) if dark_bg else (0,0,0,18))
 
     if title.strip():
         draw.text((pad, pad), title, font=title_font, fill=color)
@@ -224,7 +224,7 @@ def draw_text_block(img_rgba: Image.Image, title: str, subtitle: str, dark_bg: b
 class PosterConfig:
     canvas_px: int
     layers: int
-    shape: str  # 'circle' or 'polygon'
+    shape: str
     sides: int
     wobble: float
     spread: float
@@ -233,8 +233,11 @@ class PosterConfig:
     min_alpha: float
     max_alpha: float
     palette: List[Tuple[float, float, float]]
+
+    bg_rgb: Tuple[int, int, int]
     dark_bg: bool
-    base_hue_shift: float  # 0~1 (used as palette rotation)
+
+    base_hue_shift: float
     seed: int
 
     shadow_on: bool
@@ -251,7 +254,6 @@ class PosterConfig:
 
 
 def rotate_palette(palette: List[Tuple[float, float, float]], t01: float) -> List[Tuple[float, float, float]]:
-    # simple rotation by index based on t01
     if len(palette) < 2:
         return palette
     k = int(round(t01 * (len(palette) - 1)))
@@ -262,32 +264,24 @@ def generate_poster(cfg: PosterConfig, title: str, subtitle: str) -> Image.Image
     rng = np.random.default_rng(cfg.seed)
 
     W = H = cfg.canvas_px
-    bg = (16, 16, 18, 255) if cfg.dark_bg else (248, 248, 250, 255)
+    bg = (cfg.bg_rgb[0], cfg.bg_rgb[1], cfg.bg_rgb[2], 255)
     img = Image.new("RGBA", (W, H), bg)
 
-    # Palette rotation
     palette = rotate_palette(cfg.palette, cfg.base_hue_shift)
 
-    # Spread controls how far shapes drift from center
     center = (W / 2, H / 2)
     max_offset = cfg.spread * (W * 0.5)
 
-    # Draw from back to front: far layers more transparent & slightly lighter
     for i in range(cfg.layers):
-        depth = i / max(1, cfg.layers - 1)  # 0(back) -> 1(front)
-        # pick color
+        depth = i / max(1, cfg.layers - 1)
         c = palette[int(rng.integers(0, len(palette)))]
-        # depth-based alpha
         a = lerp(cfg.min_alpha, cfg.max_alpha, depth)
-        # radius
         r = rng.uniform(cfg.min_radius, cfg.max_radius) * W
-        # position
         dx = rng.normal(0, 1) * max_offset
         dy = rng.normal(0, 1) * max_offset
         cx = center[0] + dx
         cy = center[1] + dy
 
-        # subtle depth-based tweaks
         c2 = lighten(c, (1 - depth) * 0.25)
 
         draw_soft_shape(
@@ -312,9 +306,7 @@ def generate_poster(cfg: PosterConfig, title: str, subtitle: str) -> Image.Image
             rng=rng,
         )
 
-    # Text
     draw_text_block(img, title, subtitle, cfg.dark_bg)
-
     return img
 
 
@@ -328,10 +320,10 @@ def pil_to_png_bytes(img: Image.Image, dpi: int = 300) -> bytes:
 # Streamlit UI
 # ----------------------------
 st.set_page_config(page_title="Interactive Poster Generator", layout="wide")
-
 st.title("Palette CSV · Interactive Poster Generator")
 
 palettes = get_builtin_palettes()
+bg_presets = get_background_presets()
 
 with st.sidebar:
     st.subheader("Palette CSV")
@@ -341,7 +333,6 @@ with st.sidebar:
     with colA:
         reset_builtin = st.button("Reset built-in palette")
     with colB:
-        # just a spacer
         st.write("")
 
     st.divider()
@@ -374,8 +365,17 @@ with st.sidebar:
 
     base_hue = st.slider("Base Hue (palette shift)", 0.0, 1.0, 0.60, 0.01)
 
-    background = st.selectbox("Background", options=["Light", "Dark"], index=1)
-    dark_bg = background == "Dark"
+    st.markdown("### Background")
+    bg_choice = st.selectbox("Background", options=list(bg_presets.keys()) + ["Custom"], index=0)
+
+    if bg_choice == "Custom":
+        hex_color = st.color_picker("Pick a background color", value="#101012")
+        bg_rgb = tuple(int(hex_color[i:i+2], 16) for i in (1, 3, 5))
+    else:
+        bg_rgb = bg_presets[bg_choice]
+
+    # auto dark/light text mode based on luminance
+    dark_bg = (0.2126 * bg_rgb[0] + 0.7152 * bg_rgb[1] + 0.0722 * bg_rgb[2]) < 120
 
     st.markdown("### Shadow")
     shadow_on = st.checkbox("Shadow On", value=True)
@@ -415,7 +415,7 @@ if reset_builtin:
 
 # Config
 cfg = PosterConfig(
-    canvas_px=900,  # preview size; export uses same pixels but with DPI metadata (300)
+    canvas_px=900,
     layers=layers,
     shape=shape,
     sides=sides,
@@ -426,6 +426,7 @@ cfg = PosterConfig(
     min_alpha=min_alpha,
     max_alpha=max_alpha,
     palette=palette or palettes["dreamy"],
+    bg_rgb=bg_rgb,
     dark_bg=dark_bg,
     base_hue_shift=base_hue,
     seed=int(seed),
@@ -449,12 +450,16 @@ with left:
     st.caption("提示：调大 Layers + Max Alpha + Shadow 会更像“叠层 3D 纸片”质感；调大 Spread 会更“扩散”。")
     st.markdown("—")
     st.write("当前调色板颜色数量：", len(cfg.palette))
+    st.write("当前背景 RGB：", cfg.bg_rgb)
 
 with right:
     poster = generate_poster(cfg, title=title, subtitle=subtitle)
     st.image(poster, use_container_width=False)
 
-    png_bytes = pil_to_png_bytes(poster, dpi=300)
+    # 关键：去掉 alpha 通道，避免 Google Drive 预览棋盘格问题
+    poster_rgb = poster.convert("RGB")
+    png_bytes = pil_to_png_bytes(poster_rgb, dpi=300)
+
     st.download_button(
         label="Download High-Res PNG (300 DPI)",
         data=png_bytes,
